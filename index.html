@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="th" class="h-full bg-slate-900 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบติดตามอุณหภูมิและความชื้น (Temp & Humidity Dashboard)</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            900: '#0c4a6e',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Kanit', 'Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Google Fonts: Kanit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { font-family: 'Kanit', 'Inter', sans-serif; }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .pulse-dot {
+            box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+            animation: pulse-green 2s infinite;
+        }
+        @keyframes pulse-green {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+
+    <!-- Top Navigation Header -->
+    <header class="border-b border-slate-800 bg-slate-900/80 sticky top-0 z-30 backdrop-blur-md">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/20">
+                    <i class="fa-solid fa-[#fa-temperature-half] fa-temperature-three-quarters text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight text-white flex items-center gap-2">
+                        IoT Environment Monitor
+                        <span class="text-xs font-normal px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">Live</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">ระบบติดตามอุณหภูมิและความชื้นแบบเรียลไทม์</p>
+                </div>
+            </div>
+
+            <!-- Controls & Refresh Status -->
+            <div class="flex items-center gap-3">
+                <!-- Sync Status -->
+                <div class="hidden sm:flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
+                    <span id="syncDot" class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
+                    <span id="syncText" class="text-slate-300">กำลังเชื่อมต่อ...</span>
+                </div>
+
+                <!-- Auto Refresh Toggle -->
+                <button id="autoRefreshBtn" onclick="toggleAutoRefresh()" title="เปิด/ปิดการรีเฟรชอัตโนมัติ" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs transition-colors">
+                    <i id="autoRefreshIcon" class="fa-solid fa-arrows-rotate text-cyan-400"></i>
+                    <span id="autoRefreshText">Auto (15s)</span>
+                </button>
+
+                <!-- Manual Refresh Button -->
+                <button onclick="fetchData()" class="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs shadow-md shadow-cyan-600/20 transition-all active:scale-95">
+                    <i class="fa-solid fa-rotate-right"></i>
+                    <span>รีเฟรช</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
+
+        <!-- Config Bar (CSV Source Link Info) -->
+        <div class="glass-panel rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs">
+            <div class="flex items-center gap-2 w-full md:w-auto overflow-hidden">
+                <i class="fa-solid fa-link text-slate-400 shrink-0"></i>
+                <span class="text-slate-400 shrink-0 font-medium">แหล่งข้อมูล CSV:</span>
+                <input type="text" id="csvUrlInput" value="https://docs.google.com/spreadsheets/d/e/2PACX-1vRgqMg_1qg6lZn6ORF388woiopZXD85VcxrSa72JPkj3ZtGax2KE48AZ1ETAPpjzSPnPoCh_U7l_Yw0/pub?output=csv" 
+                       class="bg-slate-950/60 border border-slate-700/60 rounded px-2.5 py-1 text-slate-300 w-full md:w-[480px] focus:outline-none focus:border-cyan-500 truncate" readonly>
+            </div>
+            <div class="flex items-center justify-between md:justify-end w-full md:w-auto gap-4 text-slate-400 shrink-0">
+                <span>อัปเดตล่าสุด: <strong id="lastUpdatedTime" class="text-slate-200">-</strong></span>
+                <span>จำนวนแถว: <strong id="totalRecordsCount" class="text-cyan-400">0</strong></span>
+            </div>
+        </div>
+
+        <!-- Key Metrics Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            
+            <!-- Card 1: Latest Temperature -->
+            <div class="glass-panel rounded-2xl p-5 flex flex-col justify-between relative overflow-hidden group hover:border-amber-500/40 transition-all">
+                <div class="absolute -right-4 -bottom-4 opacity-10 text-amber-500 text-8xl pointer-events-none group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-temperature-high"></i>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-slate-400 font-medium text-xs flex items-center gap-2">
+                        <i class="fa-solid fa-temperature-three-quarters text-amber-400"></i> อุณหภูมิปัจจุบัน
+                    </span>
+                    <span id="tempStatusBadge" class="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300">
+                        รอข้อมูล...
+                    </span>
+                </div>
+                <div class="my-4 flex items-baseline gap-2">
+                    <span id="currentTemp" class="text-4xl font-bold tracking-tight text-slate-50">--</span>
+                    <span class="text-xl font-medium text-amber-400">°C</span>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-800/80 pt-3">
+                    <span>สูงสุด: <strong id="maxTemp" class="text-slate-200">-- °C</strong></span>
+                    <span>ต่ำสุด: <strong id="minTemp" class="text-slate-200">-- °C</strong></span>
+                </div>
+            </div>
+
+            <!-- Card 2: Latest Humidity -->
+            <div class="glass-panel rounded-2xl p-5 flex flex-col justify-between relative overflow-hidden group hover:border-blue-500/40 transition-all">
+                <div class="absolute -right-4 -bottom-4 opacity-10 text-blue-500 text-8xl pointer-events-none group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-droplet"></i>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-slate-400 font-medium text-xs flex items-center gap-2">
+                        <i class="fa-solid fa-droplet text-blue-400"></i> ความชื้นสัมพัทธ์
+                    </span>
+                    <span id="humidStatusBadge" class="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300">
+                        รอข้อมูล...
+                    </span>
+                </div>
+                <div class="my-4 flex items-baseline gap-2">
+                    <span id="currentHumid" class="text-4xl font-bold tracking-tight text-slate-50">--</span>
+                    <span class="text-xl font-medium text-blue-400">%</span>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-800/80 pt-3">
+                    <span>สูงสุด: <strong id="maxHumid" class="text-slate-200">-- %</strong></span>
+                    <span>ต่ำสุด: <strong id="minHumid" class="text-slate-200">-- %</strong></span>
+                </div>
+            </div>
+
+            <!-- Card 3: Heat Index / Comfort Index -->
+            <div class="glass-panel rounded-2xl p-5 flex flex-col justify-between relative overflow-hidden group hover:border-emerald-500/40 transition-all">
+                <div class="absolute -right-4 -bottom-4 opacity-10 text-emerald-500 text-8xl pointer-events-none group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-face-smile"></i>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-slate-400 font-medium text-xs flex items-center gap-2">
+                        <i class="fa-solid fa-wind text-emerald-400"></i> ดัชนีความสบาย (Heat Index)
+                    </span>
+                    <i class="fa-solid fa-circle-info text-slate-500 text-xs" title="ประเมินความรู้สึกเสมือนจริงของสภาพอากาศ"></i>
+                </div>
+                <div class="my-4 flex items-baseline gap-2">
+                    <span id="heatIndexVal" class="text-4xl font-bold tracking-tight text-slate-50">--</span>
+                    <span class="text-xl font-medium text-emerald-400">°C</span>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-800/80 pt-3">
+                    <span>สถานะความสบาย:</span>
+                    <strong id="comfortLevelText" class="text-emerald-400 font-medium">--</strong>
+                </div>
+            </div>
+
+            <!-- Card 4: Summary Averages -->
+            <div class="glass-panel rounded-2xl p-5 flex flex-col justify-between relative overflow-hidden group hover:border-purple-500/40 transition-all">
+                <div class="absolute -right-4 -bottom-4 opacity-10 text-purple-500 text-8xl pointer-events-none group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-chart-line"></i>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-slate-400 font-medium text-xs flex items-center gap-2">
+                        <i class="fa-solid fa-calculator text-purple-400"></i> ค่าเฉลี่ยโดยรวม
+                    </span>
+                    <span class="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[10px]">Average</span>
+                </div>
+                <div class="my-3 space-y-2">
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-slate-400 text-xs">อุณหภูมิเฉลี่ย:</span>
+                        <span id="avgTemp" class="font-semibold text-amber-300">-- °C</span>
+                    </div>
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-slate-400 text-xs">ความชื้นเฉลี่ย:</span>
+                        <span id="avgHumid" class="font-semibold text-blue-300">-- %</span>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-400 border-t border-slate-800/80 pt-2.5">
+                    <span>ข้อมูลทั้งหมด:</span>
+                    <strong id="dataRangeText" class="text-slate-200">-- รายการ</strong>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Analytics & Chart Section -->
+        <div class="glass-panel rounded-2xl p-5 flex flex-col gap-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                <div>
+                    <h2 class="font-bold text-base text-slate-100 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-area text-cyan-400"></i>
+                        กราฟแนวโน้มอุณหภูมิและความชื้น
+                    </h2>
+                    <p class="text-xs text-slate-400">แสดงการเปลี่ยนแปลงตามอนุกรมเวลา (Time Series)</p>
+                </div>
+                
+                <!-- Filter Range Controls -->
+                <div class="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs">
+                    <button onclick="setChartRange('all')" id="btnRangeAll" class="range-btn active px-3 py-1 rounded-lg text-slate-300 font-medium transition-all bg-cyan-600 text-white">ทั้งหมด</button>
+                    <button onclick="setChartRange(50)" id="btnRange50" class="range-btn px-3 py-1 rounded-lg text-slate-400 hover:text-slate-200 font-medium transition-all">50 ล่าสุด</button>
+                    <button onclick="setChartRange(20)" id="btnRange20" class="range-btn px-3 py-1 rounded-lg text-slate-400 hover:text-slate-200 font-medium transition-all">20 ล่าสุด</button>
+                </div>
+            </div>
+
+            <!-- Chart Container -->
+            <div class="relative w-full h-[320px] sm:h-[380px]">
+                <canvas id="tempHumidChart"></canvas>
+            </div>
+        </div>
+
+        <!-- History Data Table Section -->
+        <div class="glass-panel rounded-2xl p-5 flex flex-col gap-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                    <h2 class="font-bold text-base text-slate-100 flex items-center gap-2">
+                        <i class="fa-solid fa-table-list text-cyan-400"></i>
+                        ประวัติข้อมูลย้อนหลัง
+                    </h2>
+                    <p class="text-xs text-slate-400">ตารางแสดงรายการอุณหภูมิและความชื้นย้อนหลังทั้งหมด</p>
+                </div>
+
+                <!-- Table Controls -->
+                <div class="flex items-center gap-3">
+                    <div class="relative w-full sm:w-64">
+                        <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-500 text-xs"></i>
+                        <input type="text" id="searchInput" onkeyup="filterTable()" placeholder="ค้นหาข้อมูล..." 
+                               class="bg-slate-900 border border-slate-700/80 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 w-full focus:outline-none focus:border-cyan-500">
+                    </div>
+                    <button onclick="exportCSV()" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-300 flex items-center gap-1.5 transition-colors shrink-0">
+                        <i class="fa-solid fa-download text-cyan-400"></i>
+                        <span>ดาวน์โหลด</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Table Wrapper -->
+            <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-[400px] overflow-y-auto">
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/90 text-slate-400 uppercase text-[11px] sticky top-0 border-b border-slate-800 z-10 backdrop-blur-md">
+                        <tr>
+                            <th class="py-3 px-4 font-semibold">#</th>
+                            <th class="py-3 px-4 font-semibold">วัน - เวลา (Timestamp)</th>
+                            <th class="py-3 px-4 font-semibold">อุณหภูมิ (°C)</th>
+                            <th class="py-3 px-4 font-semibold">ความชื้น (%)</th>
+                            <th class="py-3 px-4 font-semibold">สถานะประเมิน</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dataTableBody" class="divide-y divide-slate-800/60 bg-slate-950/40">
+                        <tr>
+                            <td colspan="5" class="py-8 text-center text-slate-500">
+                                <i class="fa-solid fa-spinner fa-spin text-xl text-cyan-500 mb-2"></i>
+                                <p>กำลังโหลดข้อมูลจาก Google Sheets...</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Table Footer Stats -->
+            <div class="flex justify-between items-center text-xs text-slate-400 pt-1">
+                <span id="tableShowingCount">แสดง 0 รายการ</span>
+                <span class="text-slate-500">ข้อมูลจะอัปเดตอัตโนมัติตามระยะเวลาที่กำหนด</span>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-800/80 py-4 text-center text-xs text-slate-500">
+        <p>© 2026 Live IoT Temperature & Humidity Monitoring System | Driven by Google Sheets CSV</p>
+    </footer>
+
+    <script>
+        // Global Variables
+        let rawCSVData = [];
+        let parsedRecords = [];
+        let chartInstance = null;
+        let autoRefreshInterval = null;
+        let isAutoRefresh = true;
+        let selectedRange = 'all';
+
+        // Target CSV URL
+        const DEFAULT_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRgqMg_1qg6lZn6ORF388woiopZXD85VcxrSa72JPkj3ZtGax2KE48AZ1ETAPpjzSPnPoCh_U7l_Yw0/pub?output=csv";
+
+        // Initialize App on Load
+        window.onload = function() {
+            initChart();
+            fetchData();
+            setupAutoRefresh();
+        };
+
+        function setupAutoRefresh() {
+            if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+            if (isAutoRefresh) {
+                autoRefreshInterval = setInterval(() => {
+                    fetchData(true);
+                }, 15000); // 15 seconds refresh interval
+            }
+        }
+
+        function toggleAutoRefresh() {
+            isAutoRefresh = !isAutoRefresh;
+            const btn = document.getElementById('autoRefreshBtn');
+            const icon = document.getElementById('autoRefreshIcon');
+            const text = document.getElementById('autoRefreshText');
+
+            if (isAutoRefresh) {
+                btn.classList.replace('bg-slate-800', 'bg-slate-800');
+                icon.classList.add('fa-arrows-rotate', 'text-cyan-400');
+                text.innerText = "Auto (15s)";
+                setupAutoRefresh();
+            } else {
+                icon.classList.remove('fa-arrows-rotate');
+                icon.classList.add('fa-pause', 'text-amber-400');
+                text.innerText = "Paused";
+                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+            }
+        }
+
+        async function fetchData(isSilent = false) {
+            const syncDot = document.getElementById('syncDot');
+            const syncText = document.getElementById('syncText');
+            const url = document.getElementById('csvUrlInput').value || DEFAULT_CSV_URL;
+
+            if (!isSilent) {
+                syncText.innerText = "กำลังอัปเดต...";
+                syncDot.className = "w-2 h-2 rounded-full bg-amber-400 pulse-dot";
+            }
+
+            try {
+                // Fetch CSV with cache busting parameter
+                const cacheBuster = `&_t=${new Date().getTime()}`;
+                const fetchUrl = url.includes('?') ? `${url}&t=${new Date().getTime()}` : `${url}?output=csv&t=${new Date().getTime()}`;
+                
+                Papa.parse(fetchUrl, {
+                    download: true,
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        if (results.data && results.data.length > 0) {
+                            processCSVData(results.data);
+                            syncText.innerText = "เชื่อมต่อสำเร็จ";
+                            syncDot.className = "w-2 h-2 rounded-full bg-emerald-500 pulse-dot";
+                            document.getElementById('lastUpdatedTime').innerText = new Date().toLocaleTimeString('th-TH');
+                        } else {
+                            throw new Error("ไม่พบข้อมูลใน CSV");
+                        }
+                    },
+                    error: function(err) {
+                        console.error("PapaParse error:", err);
+                        handleFetchError("ไม่สามารถอ่านไฟล์ CSV ได้");
+                    }
+                });
+
+            } catch (error) {
+                console.error("Fetch Error:", error);
+                handleFetchError("ไม่สามารถเชื่อมต่อข้อมูลได้");
+            }
+        }
+
+        function handleFetchError(msg) {
+            const syncDot = document.getElementById('syncDot');
+            const syncText = document.getElementById('syncText');
+            syncText.innerText = msg;
+            syncDot.className = "w-2 h-2 rounded-full bg-rose-500";
+            
+            // If empty, generate friendly fallback mock data to keep UI functional
+            if (parsedRecords.length === 0) {
+                console.warn("Using sample mock dataset for preview...");
+                generateMockData();
+            }
+        }
+
+        function processCSVData(data) {
+            if (!data || data.length === 0) return;
+
+            // Smart detection of column headers
+            const sampleRow = data[0];
+            const keys = Object.keys(sampleRow);
+
+            let timeKey = keys.find(k => /time|date|วัน|เวลา|timestamp|created/i.test(k)) || keys[0];
+            let tempKey = keys.find(k => /temp|อุณหภูมิ|°c|celsius|t$/i.test(k));
+            let humidKey = keys.find(k => /humid|ความชื้น|%|rh|h$/i.test(k));
+
+            // Fallback column index if headers aren't detected by regex
+            if (!tempKey && keys.length >= 2) tempKey = keys[1];
+            if (!humidKey && keys.length >= 3) humidKey = keys[2];
+
+            parsedRecords = data.map((row, idx) => {
+                const rawTemp = parseFloat(row[tempKey]);
+                const rawHumid = parseFloat(row[humidKey]);
+
+                return {
+                    id: idx + 1,
+                    time: row[timeKey] || `Record #${idx + 1}`,
+                    temp: !isNaN(rawTemp) ? rawTemp : null,
+                    humid: !isNaN(rawHumid) ? rawHumid : null
+                };
+            }).filter(item => item.temp !== null || item.humid !== null);
+
+            updateDashboardUI();
+        }
+
+        function generateMockData() {
+            const mock = [];
+            const now = new Date();
+            for (let i = 25; i >= 0; i--) {
+                const d = new Date(now.getTime() - i * 5 * 60000);
+                const timeStr = d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+                const baseTemp = 28 + Math.sin(i / 3) * 3 + (Math.random() * 0.8);
+                const baseHumid = 60 + Math.cos(i / 3) * 8 + (Math.random() * 2);
+
+                mock.push({
+                    id: 26 - i,
+                    time: timeStr,
+                    temp: parseFloat(baseTemp.toFixed(1)),
+                    humid: parseFloat(baseHumid.toFixed(1))
+                });
+            }
+            parsedRecords = mock;
+            updateDashboardUI();
+        }
+
+        function updateDashboardUI() {
+            if (parsedRecords.length === 0) return;
+
+            const total = parsedRecords.length;
+            document.getElementById('totalRecordsCount').innerText = total;
+            document.getElementById('dataRangeText').innerText = `${total} รายการ`;
+
+            const latest = parsedRecords[parsedRecords.length - 1];
+            
+            // Latest Temp & Humid
+            const currentTemp = latest.temp !== null ? latest.temp.toFixed(1) : '--';
+            const currentHumid = latest.humid !== null ? latest.humid.toFixed(1) : '--';
+
+            document.getElementById('currentTemp').innerText = currentTemp;
+            document.getElementById('currentHumid').innerText = currentHumid;
+
+            // Temp & Humid Stats
+            const temps = parsedRecords.map(r => r.temp).filter(v => v !== null);
+            const humids = parsedRecords.map(r => r.humid).filter(v => v !== null);
+
+            if (temps.length > 0) {
+                const maxT = Math.max(...temps).toFixed(1);
+                const minT = Math.min(...temps).toFixed(1);
+                const avgT = (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1);
+
+                document.getElementById('maxTemp').innerText = `${maxT} °C`;
+                document.getElementById('minTemp').innerText = `${minT} °C`;
+                document.getElementById('avgTemp').innerText = `${avgT} °C`;
+            }
+
+            if (humids.length > 0) {
+                const maxH = Math.max(...humids).toFixed(1);
+                const minH = Math.min(...humids).toFixed(1);
+                const avgH = (humids.reduce((a, b) => a + b, 0) / humids.length).toFixed(1);
+
+                document.getElementById('maxHumid').innerText = `${maxH} %`;
+                document.getElementById('minHumid').innerText = `${minH} %`;
+                document.getElementById('avgHumid').innerText = `${avgH} %`;
+            }
+
+            // Status Badges & Heat Index Calculation
+            updateBadgesAndHeatIndex(latest.temp, latest.humid);
+
+            // Update Chart & Table
+            updateChart();
+            renderTable();
+        }
+
+        function updateBadgesAndHeatIndex(T, RH) {
+            const tempBadge = document.getElementById('tempStatusBadge');
+            const humidBadge = document.getElementById('humidStatusBadge');
+            const heatValElem = document.getElementById('heatIndexVal');
+            const comfortTextElem = document.getElementById('comfortLevelText');
+
+            // Temp Status
+            if (T === null) {
+                tempBadge.innerText = "ไม่มีข้อมูล";
+            } else if (T < 22) {
+                tempBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30";
+                tempBadge.innerText = "เย็น (Cool)";
+            } else if (T <= 32) {
+                tempBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                tempBadge.innerText = "ปกติ (Comfortable)";
+            } else {
+                tempBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30";
+                tempBadge.innerText = "ร้อย (Hot)";
+            }
+
+            // Humidity Status
+            if (RH === null) {
+                humidBadge.innerText = "ไม่มีข้อมูล";
+            } else if (RH < 40) {
+                humidBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30";
+                humidBadge.innerText = "แห้ง (Dry)";
+            } else if (RH <= 70) {
+                humidBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                humidBadge.innerText = "เหมาะสม (Ideal)";
+            } else {
+                humidBadge.className = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30";
+                humidBadge.innerText = "ชื้นสูง (High)";
+            }
+
+            // Simplified Heat Index Formula (°C)
+            if (T !== null && RH !== null) {
+                // Rothfusz Heat index approximation simplified for Celsius
+                let hi = T;
+                if (T >= 26) {
+                    hi = -8.784695 + 1.61139411*T + 2.33854883*RH - 0.14611605*T*RH 
+                         - 0.012308094*T*T - 0.016424828*RH*RH + 0.002211732*T*T*RH 
+                         + 0.00072546*T*RH*RH - 0.000003582*T*T*RH*RH;
+                }
+                
+                const hiVal = hi.toFixed(1);
+                heatValElem.innerText = hiVal;
+
+                if (hi < 27) {
+                    comfortTextElem.innerText = "สบายดี (Normal)";
+                    comfortTextElem.className = "text-emerald-400 font-medium";
+                } else if (hi < 33) {
+                    comfortTextElem.innerText = "เริ่มอบอ้าว (Caution)";
+                    comfortTextElem.className = "text-amber-400 font-medium";
+                } else if (hi < 41) {
+                    comfortTextElem.innerText = "ร้อนมาก (Extreme Caution)";
+                    comfortTextElem.className = "text-orange-400 font-medium";
+                } else {
+                    comfortTextElem.innerText = "อันตรายจากความร้อน (Danger)";
+                    comfortTextElem.className = "text-rose-500 font-medium";
+                }
+            } else {
+                heatValElem.innerText = "--";
+                comfortTextElem.innerText = "--";
+            }
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('tempHumidChart').getContext('2d');
+            
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'อุณหภูมิ (°C)',
+                            data: [],
+                            borderColor: '#f59e0b', // Amber-500
+                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                            borderWidth: 2.5,
+                            pointRadius: 3,
+                            pointHoverRadius: 6,
+                            pointBackgroundColor: '#f59e0b',
+                            fill: true,
+                            tension: 0.35,
+                            yAxisID: 'yTemp'
+                        },
+                        {
+                            label: 'ความชื้น (%)',
+                            data: [],
+                            borderColor: '#3b82f6', // Blue-500
+                            backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                            borderWidth: 2.5,
+                            pointRadius: 3,
+                            pointHoverRadius: 6,
+                            pointBackgroundColor: '#3b82f6',
+                            fill: true,
+                            tension: 0.35,
+                            yAxisID: 'yHumid'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                color: '#94a3b8',
+                                font: { family: 'Kanit', size: 12 },
+                                usePointStyle: true,
+                                boxWidth: 8
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleColor: '#f8fafc',
+                            bodyColor: '#cbd5e1',
+                            borderColor: 'rgba(255,255,255,0.1)',
+                            borderWidth: 1,
+                            padding: 10,
+                            displayColors: true,
+                            boxPadding: 4
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#64748b', font: { family: 'Kanit', size: 10 } }
+                        },
+                        yTemp: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'อุณหภูมิ (°C)',
+                                color: '#f59e0b',
+                                font: { family: 'Kanit', size: 11 }
+                            },
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#94a3b8', font: { family: 'Kanit', size: 10 } }
+                        },
+                        yHumid: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'ความชื้น (%)',
+                                color: '#3b82f6',
+                                font: { family: 'Kanit', size: 11 }
+                            },
+                            grid: { drawOnChartArea: false },
+                            ticks: { color: '#94a3b8', font: { family: 'Kanit', size: 10 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateChart() {
+            if (!chartInstance) return;
+
+            let dataToDisplay = [...parsedRecords];
+            if (selectedRange !== 'all') {
+                const limit = parseInt(selectedRange);
+                dataToDisplay = dataToDisplay.slice(-limit);
+            }
+
+            const labels = dataToDisplay.map(r => r.time);
+            const tempData = dataToDisplay.map(r => r.temp);
+            const humidData = dataToDisplay.map(r => r.humid);
+
+            chartInstance.data.labels = labels;
+            chartInstance.data.datasets[0].data = tempData;
+            chartInstance.data.datasets[1].data = humidData;
+            chartInstance.update('none'); // smooth update
+        }
+
+        function setChartRange(range) {
+            selectedRange = range;
+            
+            // Toggle active state for buttons
+            ['All', '50', '20'].forEach(r => {
+                const btn = document.getElementById(`btnRange${r}`);
+                if (btn) {
+                    if ((r.toLowerCase() === 'all' && range === 'all') || (r === String(range))) {
+                        btn.className = "range-btn active px-3 py-1 rounded-lg font-medium transition-all bg-cyan-600 text-white shadow-sm";
+                    } else {
+                        btn.className = "range-btn px-3 py-1 rounded-lg text-slate-400 hover:text-slate-200 font-medium transition-all";
+                    }
+                }
+            });
+
+            updateChart();
+        }
+
+        function renderTable(dataOverride = null) {
+            const tbody = document.getElementById('dataTableBody');
+            const records = dataOverride || parsedRecords;
+
+            if (records.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="py-8 text-center text-slate-500">
+                            ไม่พบรายการข้อมูล
+                        </td>
+                    </tr>
+                `;
+                document.getElementById('tableShowingCount').innerText = "แสดง 0 รายการ";
+                return;
+            }
+
+            // Render table rows in reverse chronological order (newest top)
+            const reversed = [...records].reverse();
+            
+            const html = reversed.map((row, index) => {
+                const tempVal = row.temp !== null ? `${row.temp.toFixed(1)} °C` : '--';
+                const humidVal = row.humid !== null ? `${row.humid.toFixed(1)} %` : '--';
+
+                // Status Tag
+                let badgeClass = "bg-slate-800 text-slate-400";
+                let statusMsg = "ปกติ";
+                
+                if (row.temp > 35) {
+                    badgeClass = "bg-rose-500/20 text-rose-400 border border-rose-500/30";
+                    statusMsg = "อุณหภูมิสูง";
+                } else if (row.humid > 80) {
+                    badgeClass = "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30";
+                    statusMsg = "ความชื้นสูง";
+                } else if (row.temp < 20) {
+                    badgeClass = "bg-blue-500/20 text-blue-400 border border-blue-500/30";
+                    statusMsg = "อากาศเย็น";
+                } else {
+                    badgeClass = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                    statusMsg = "สภาวะปกติ";
+                }
+
+                return `
+                    <tr class="hover:bg-slate-900/60 transition-colors">
+                        <td class="py-3 px-4 font-mono text-slate-500">${reversed.length - index}</td>
+                        <td class="py-3 px-4 font-medium text-slate-200">${row.time}</td>
+                        <td class="py-3 px-4 font-semibold text-amber-400">${tempVal}</td>
+                        <td class="py-3 px-4 font-semibold text-blue-400">${humidVal}</td>
+                        <td class="py-3 px-4">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${badgeClass}">
+                                ${statusMsg}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            tbody.innerHTML = html;
+            document.getElementById('tableShowingCount').innerText = `แสดง ${records.length} รายการ`;
+        }
+
+        function filterTable() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            if (!query) {
+                renderTable();
+                return;
+            }
+
+            const filtered = parsedRecords.filter(r => {
+                const timeMatch = r.time.toString().toLowerCase().includes(query);
+                const tempMatch = r.temp !== null && r.temp.toString().includes(query);
+                const humidMatch = r.humid !== null && r.humid.toString().includes(query);
+                return timeMatch || tempMatch || humidMatch;
+            });
+
+            renderTable(filtered);
+        }
+
+        function exportCSV() {
+            if (parsedRecords.length === 0) {
+                alert("ไม่มีข้อมูลสำหรับดาวน์โหลด");
+                return;
+            }
+
+            let csvContent = "data:text/csv;charset=utf-8,ID,Timestamp,Temperature_C,Humidity_Percent\n";
+            parsedRecords.forEach(r => {
+                csvContent += `${r.id},"${r.time}",${r.temp !== null ? r.temp : ''},${r.humid !== null ? r.humid : ''}\n`;
+            });
+
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `IoT_Environment_Data_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+</html>
